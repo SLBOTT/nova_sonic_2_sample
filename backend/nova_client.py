@@ -225,17 +225,10 @@ class NovaSonicSession:
         self.active = False
 
         if self.receiver_task:
+            self.receiver_task.cancel()
             try:
-                await asyncio.wait_for(self.receiver_task, timeout=1.0)
-            except asyncio.TimeoutError:
-                self.receiver_task.cancel()
-                try:
-                    await self.receiver_task
-                except asyncio.CancelledError:
-                    pass
-            except asyncio.CancelledError:
-                pass
-            except Exception:
+                await asyncio.wait_for(self.receiver_task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
                 pass
             finally:
                 self.receiver_task = None

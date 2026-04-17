@@ -1,6 +1,7 @@
 import asyncio
 import os
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +22,26 @@ DEFAULT_REGION = "us-east-1"
 load_dotenv(BACKEND_DIR / ".env")
 load_dotenv(ROOT_DIR / ".env")
 
-app = FastAPI()
 sessions: dict[str, NovaSonicSession] = {}
 session_configs: dict[str, dict] = {}
 connections: dict[str, WebSocket] = {}
 connection_locks: dict[str, asyncio.Lock] = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    # Shut down all active sessions when the server exits
+    sids = list(sessions.keys())
+    if sids:
+        print(f"Closing {len(sids)} active session(s) on shutdown...", flush=True)
+        await asyncio.gather(
+            *(close_session(sid) for sid in sids),
+            return_exceptions=True,
+        )
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/")
@@ -79,7 +95,11 @@ async def close_session(sid: str) -> None:
     session_configs.pop(sid, None)
     if session:
         try:
-            await session.close()
+            await asyncio.wait_for(session.close(), timeout=5.0)
+        except asyncio.TimeoutError:
+            print(f"Session {sid} close timed out, forcing cleanup", flush=True)
+            if session.receiver_task:
+                session.receiver_task.cancel()
         except Exception as exc:
             print(f"Session cleanup error for {sid}: {exc}", flush=True)
 
