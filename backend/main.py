@@ -312,7 +312,7 @@ app.mount("/", StaticFiles(directory=PUBLIC_DIR), name="public")
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "3001"))
+    port = int(os.getenv("PORT", "8000"))
     host = os.getenv("HOST", "localhost")
     print(f"Python backend listening on http://{host}:{port}", flush=True)
     uvicorn.run("main:app", host=host, port=port, reload=False, app_dir=str(BACKEND_DIR))
