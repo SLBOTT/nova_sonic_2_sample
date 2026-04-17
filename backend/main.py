@@ -12,6 +12,30 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from nova_client import DEFAULT_MODEL_ID, NovaSonicSession
+from tools import (
+    ToolRegistry,
+    date_time_tool,
+    location_search_tool,
+    reasoning_tool,
+    transcript_correction_tool,
+    weather_tool,
+    wikipedia_tool,
+)
+
+
+def create_default_registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(date_time_tool)
+    registry.register(weather_tool)
+    registry.register(location_search_tool)
+    registry.register(reasoning_tool)
+    registry.register(wikipedia_tool)
+    registry.register(transcript_correction_tool)
+    return registry
+
+
+# Single shared registry — tools are stateless so one instance is fine
+_tool_registry = create_default_registry()
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -51,7 +75,15 @@ async def index():
 
 @app.get("/api/tools")
 async def tools():
-    return {"tools": []}
+    return {
+        "tools": [
+            {
+                "name": t.name,
+                "description": t.description,
+            }
+            for t in _tool_registry.all()
+        ]
+    }
 
 
 @app.get("/health")
@@ -128,6 +160,8 @@ async def handle_initialize_connection(
             "temperature": inference_config.get("temperature", 1),
         },
         turn_detection_config=turn_detection_config,
+        enabled_tools=config.get("enabledTools") or None,
+        tool_registry=_tool_registry,
         on_event=lambda event_name, payload: emit_to_socket(sid, event_name, payload),
     )
     sessions[sid] = session
