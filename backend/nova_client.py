@@ -192,35 +192,45 @@ class NovaSonicSession:
         if not self.active:
             return
 
-        if self.audio_started:
-            await self.send_event(
-                {
-                    "event": {
-                        "contentEnd": {
-                            "promptName": self.prompt_name,
-                            "contentName": self.audio_content_name,
-                        }
-                    }
-                }
-            )
-            await asyncio.sleep(0.2)
-
-        if self.prompt_started:
-            await self.send_event(
-                {"event": {"promptEnd": {"promptName": self.prompt_name}}}
-            )
-            await asyncio.sleep(0.2)
-
-        await self.send_event({"event": {"sessionEnd": {}}})
-        await asyncio.sleep(0.2)
-        self.active = False
-
         if self.receiver_task:
             self.receiver_task.cancel()
             try:
                 await self.receiver_task
             except asyncio.CancelledError:
                 pass
+            self.receiver_task = None
+
+        if self.audio_started:
+            try:
+                await self.send_event(
+                    {
+                        "event": {
+                            "contentEnd": {
+                                "promptName": self.prompt_name,
+                                "contentName": self.audio_content_name,
+                            }
+                        }
+                    }
+                )
+            except Exception as exc:
+                print(f"Error sending audio contentEnd: {exc}", flush=True)
+            await asyncio.sleep(0.2)
+
+        if self.prompt_started:
+            try:
+                await self.send_event(
+                    {"event": {"promptEnd": {"promptName": self.prompt_name}}}
+                )
+            except Exception as exc:
+                print(f"Error sending promptEnd: {exc}", flush=True)
+            await asyncio.sleep(0.2)
+
+        try:
+            await self.send_event({"event": {"sessionEnd": {}}})
+        except Exception as exc:
+            print(f"Error sending sessionEnd: {exc}", flush=True)
+        await asyncio.sleep(0.2)
+        self.active = False
 
     async def _send_text_content(
         self,
@@ -300,13 +310,16 @@ class NovaSonicSession:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                await self.on_event(
-                    "error",
-                    {
-                        "source": "responseStream",
-                        "details": str(exc),
-                    },
-                )
+                try:
+                    await self.on_event(
+                        "error",
+                        {
+                            "source": "responseStream",
+                            "details": str(exc),
+                        },
+                    )
+                except Exception:
+                    pass
                 self.active = False
 
     async def _dispatch_response(self, data: dict) -> None:

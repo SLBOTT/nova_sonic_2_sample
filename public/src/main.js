@@ -1,8 +1,9 @@
 import { AudioPlayer } from './lib/play/AudioPlayer.js';
 import { ChatHistoryManager } from "./lib/util/ChatHistoryManager.js";
+import { createWebSocketSocket } from "./ws-socket.js";
 
 // Connect to the server
-const socket = io();
+const socket = createWebSocketSocket();
 
 // DOM elements
 const voiceBtn = document.getElementById('voice-btn');

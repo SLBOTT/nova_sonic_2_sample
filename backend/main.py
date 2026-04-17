@@ -1,11 +1,12 @@
 import asyncio
 import os
+import uuid
 from pathlib import Path
+from typing import Any
 
-import socketio
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -15,38 +16,29 @@ from nova_client import DEFAULT_MODEL_ID, NovaSonicSession
 BACKEND_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BACKEND_DIR.parent
 PUBLIC_DIR = ROOT_DIR / "public"
-SOCKET_IO_CLIENT_JS = (
-    ROOT_DIR / "node_modules" / "socket.io" / "client-dist" / "socket.io.js"
-)
 DEFAULT_REGION = "us-east-1"
 
 load_dotenv(BACKEND_DIR / ".env")
 load_dotenv(ROOT_DIR / ".env")
 
-api = FastAPI()
-sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
-app = socketio.ASGIApp(sio, other_asgi_app=api)
-
+app = FastAPI()
 sessions: dict[str, NovaSonicSession] = {}
 session_configs: dict[str, dict] = {}
+connections: dict[str, WebSocket] = {}
+connection_locks: dict[str, asyncio.Lock] = {}
 
 
-@api.get("/")
+@app.get("/")
 async def index():
     return FileResponse(PUBLIC_DIR / "index.html")
 
 
-@api.get("/api/tools")
+@app.get("/api/tools")
 async def tools():
     return {"tools": []}
 
 
-@api.get("/socket.io-client/socket.io.js")
-async def socket_io_client():
-    return FileResponse(SOCKET_IO_CLIENT_JS)
-
-
-@api.get("/health")
+@app.get("/health")
 async def health():
     return {
         "status": "ok",
@@ -55,36 +47,52 @@ async def health():
     }
 
 
-api.mount("/", StaticFiles(directory=PUBLIC_DIR), name="public")
+async def send_ws(sid: str, message: dict[str, Any]) -> None:
+    websocket = connections.get(sid)
+    if not websocket:
+        return
+
+    lock = connection_locks.setdefault(sid, asyncio.Lock())
+    async with lock:
+        try:
+            await websocket.send_json(message)
+        except (WebSocketDisconnect, RuntimeError, OSError):
+            connections.pop(sid, None)
+            connection_locks.pop(sid, None)
 
 
-async def emit_to_socket(sid: str, event_name: str, data: dict) -> None:
-    await sio.emit(event_name, data, to=sid)
+async def emit_to_socket(sid: str, event_name: str, data: dict | None = None) -> None:
+    await send_ws(sid, {"event": event_name, "data": data})
+
+
+async def send_ack(
+    sid: str,
+    message_id: str | None,
+    data: dict | None = None,
+) -> None:
+    if message_id:
+        await send_ws(sid, {"replyTo": message_id, "data": data or {}})
 
 
 async def close_session(sid: str) -> None:
     session = sessions.pop(sid, None)
     session_configs.pop(sid, None)
     if session:
-        await session.close()
+        try:
+            await session.close()
+        except Exception as exc:
+            print(f"Session cleanup error for {sid}: {exc}", flush=True)
 
 
-@sio.event
-async def connect(sid, environ):
-    print(f"Client connected: {sid}", flush=True)
-
-
-@sio.event
-async def disconnect(sid):
-    print(f"Client disconnected: {sid}", flush=True)
-    await close_session(sid)
-
-
-@sio.event
-async def initializeConnection(sid, data=None):
+async def handle_initialize_connection(
+    sid: str,
+    data: dict | None,
+    message_id: str | None,
+) -> None:
     config = data or {}
     if sid in sessions:
-        return {"success": True}
+        await send_ack(sid, message_id, {"success": True})
+        return
 
     region = config.get("region") or os.getenv("AWS_REGION", DEFAULT_REGION)
     inference_config = config.get("inferenceConfig") or {}
@@ -105,14 +113,13 @@ async def initializeConnection(sid, data=None):
     sessions[sid] = session
     session_configs[sid] = config
 
-    return {"success": True}
+    await send_ack(sid, message_id, {"success": True})
 
 
-@sio.event
-async def promptStart(sid, data=None):
+async def handle_prompt_start(sid: str, data: dict | None) -> None:
     session = sessions.get(sid)
     if not session:
-        await sio.emit("error", {"message": "No active session for prompt start"}, to=sid)
+        await emit_to_socket(sid, "error", {"message": "No active session for prompt start"})
         return
 
     data = data or {}
@@ -122,101 +129,132 @@ async def promptStart(sid, data=None):
             output_sample_rate=data.get("outputSampleRate") or 24000,
         )
     except Exception as exc:
-        await sio.emit(
+        await emit_to_socket(
+            sid,
             "error",
             {"message": "Error processing prompt start", "details": str(exc)},
-            to=sid,
         )
 
 
-@sio.event
-async def systemPrompt(sid, data=None):
+async def handle_system_prompt(sid: str, data: str | dict | None) -> None:
     session = sessions.get(sid)
     if not session:
-        await sio.emit("error", {"message": "No active session for system prompt"}, to=sid)
+        await emit_to_socket(sid, "error", {"message": "No active session for system prompt"})
         return
 
-    if isinstance(data, str):
-        content = data
-    else:
-        content = (data or {}).get("content", "")
-
+    content = data if isinstance(data, str) else (data or {}).get("content", "")
     try:
         await session.send_system_prompt(content)
     except Exception as exc:
-        await sio.emit(
+        await emit_to_socket(
+            sid,
             "error",
             {"message": "Error processing system prompt", "details": str(exc)},
-            to=sid,
         )
 
 
-@sio.event
-async def audioStart(sid):
+async def handle_audio_start(sid: str) -> None:
     session = sessions.get(sid)
     if not session:
-        await sio.emit("error", {"message": "No active session for audio start"}, to=sid)
+        await emit_to_socket(sid, "error", {"message": "No active session for audio start"})
         return
 
     try:
         await session.start_audio()
-        await sio.emit("audioReady", to=sid)
+        await emit_to_socket(sid, "audioReady")
     except Exception as exc:
-        await sio.emit(
+        await emit_to_socket(
+            sid,
             "error",
             {"message": "Error processing audio start", "details": str(exc)},
-            to=sid,
         )
 
 
-@sio.event
-async def audioInput(sid, audio_data):
+async def handle_audio_input(sid: str, audio_data: str) -> None:
     session = sessions.get(sid)
     if not session:
-        await sio.emit("error", {"message": "No active session for audio input"}, to=sid)
+        await emit_to_socket(sid, "error", {"message": "No active session for audio input"})
         return
 
     try:
         await session.send_audio_input(audio_data)
     except Exception as exc:
-        await sio.emit(
+        await emit_to_socket(
+            sid,
             "error",
             {"message": "Error processing audio", "details": str(exc)},
-            to=sid,
         )
 
 
-@sio.event
-async def textInput(sid, data=None):
+async def handle_text_input(sid: str, data: dict | None) -> None:
     session = sessions.get(sid)
     if not session:
-        await sio.emit("error", {"message": "No active session for text input"}, to=sid)
+        await emit_to_socket(sid, "error", {"message": "No active session for text input"})
         return
 
     try:
         await session.send_text_input((data or {}).get("content", ""))
     except Exception as exc:
-        await sio.emit(
+        await emit_to_socket(
+            sid,
             "error",
             {"message": "Error processing text input", "details": str(exc)},
-            to=sid,
         )
 
 
-@sio.event
-async def stopAudio(sid):
-    await close_session(sid)
-    await sio.emit("sessionClosed", to=sid)
+async def handle_event(sid: str, message: dict[str, Any]) -> None:
+    event = message.get("event")
+    data = message.get("data")
+    message_id = message.get("id")
+
+    if event == "initializeConnection":
+        await handle_initialize_connection(sid, data, message_id)
+    elif event == "promptStart":
+        await handle_prompt_start(sid, data)
+    elif event == "systemPrompt":
+        await handle_system_prompt(sid, data)
+    elif event == "audioStart":
+        await handle_audio_start(sid)
+    elif event == "audioInput":
+        await handle_audio_input(sid, data)
+    elif event == "textInput":
+        await handle_text_input(sid, data)
+    elif event == "stopAudio":
+        await close_session(sid)
+        await emit_to_socket(sid, "sessionClosed")
+    elif event == "startNewChat":
+        await close_session(sid)
+        await handle_initialize_connection(sid, data or {}, message_id)
+    else:
+        await emit_to_socket(sid, "error", {"message": f"Unknown event: {event}"})
 
 
-@sio.event
-async def startNewChat(sid, data=None):
-    await close_session(sid)
-    await initializeConnection(sid, data or {})
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    sid = str(uuid.uuid4())
+    connections[sid] = websocket
+    connection_locks[sid] = asyncio.Lock()
+
+    print(f"WebSocket connected: {sid}", flush=True)
+    await emit_to_socket(sid, "connect")
+
+    try:
+        while True:
+            message = await websocket.receive_json()
+            await handle_event(sid, message)
+    except WebSocketDisconnect:
+        print(f"WebSocket disconnected: {sid}", flush=True)
+    except Exception as exc:
+        if sid in connections:
+            await emit_to_socket(sid, "error", {"message": "WebSocket error", "details": str(exc)})
+    finally:
+        connections.pop(sid, None)
+        connection_locks.pop(sid, None)
+        await close_session(sid)
 
 
-async def shutdown() -> None:
-    await asyncio.gather(*(close_session(sid) for sid in list(sessions.keys())))
+app.mount("/", StaticFiles(directory=PUBLIC_DIR), name="public")
 
 
 if __name__ == "__main__":
