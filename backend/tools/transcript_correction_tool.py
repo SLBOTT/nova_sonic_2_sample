@@ -10,8 +10,8 @@ from typing import Any
 
 import boto3
 
-from ..consts import TOOL_MODELS
-from .base import Tool
+from consts import TOOL_MODELS
+from tools.base import Tool
 
 _SYSTEM_PROMPT = (
     "You are a speech-to-text correction assistant specialised in identifying "

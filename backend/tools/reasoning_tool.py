@@ -10,8 +10,8 @@ from typing import Any
 
 import boto3
 
-from ..consts import TOOL_MODELS
-from .base import Tool
+from consts import TOOL_MODELS
+from tools.base import Tool
 
 _TASK_PROMPTS: dict[str, str] = {
     "reason": "Task: Break down the problem step by step using logical reasoning. Show your work clearly.",
