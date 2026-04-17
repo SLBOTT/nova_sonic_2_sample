@@ -11,6 +11,12 @@ build/
 .env.local
 .env.*.local
 
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+backend/.venv/
+
 # OS files
 .DS_Store
 Thumbs.db
