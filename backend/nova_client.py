@@ -192,14 +192,6 @@ class NovaSonicSession:
         if not self.active:
             return
 
-        if self.receiver_task:
-            self.receiver_task.cancel()
-            try:
-                await self.receiver_task
-            except asyncio.CancelledError:
-                pass
-            self.receiver_task = None
-
         if self.audio_started:
             try:
                 await self.send_event(
@@ -231,6 +223,22 @@ class NovaSonicSession:
             print(f"Error sending sessionEnd: {exc}", flush=True)
         await asyncio.sleep(0.2)
         self.active = False
+
+        if self.receiver_task:
+            try:
+                await asyncio.wait_for(self.receiver_task, timeout=1.0)
+            except asyncio.TimeoutError:
+                self.receiver_task.cancel()
+                try:
+                    await self.receiver_task
+                except asyncio.CancelledError:
+                    pass
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+            finally:
+                self.receiver_task = None
 
     async def _send_text_content(
         self,
