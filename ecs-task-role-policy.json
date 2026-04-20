@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "NovaSonicStreaming",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModelWithBidirectionalStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-sonic-v1:0"
+      ]
+    },
+    {
+      "Sid": "KnowledgeBaseRetrieve",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:Retrieve"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:us-east-1:176423573642:knowledge-base/*"
+      ]
+    }
+  ]
+}

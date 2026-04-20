@@ -1,0 +1,40 @@
+{
+  "family": "sample-voicebot-nova-sonic",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::176423573642:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::176423573642:role/sample-voicebot-task-role",
+  "containerDefinitions": [
+    {
+      "name": "voicebot",
+      "image": "176423573642.dkr.ecr.us-east-1.amazonaws.com/sample-voicebot-nova-sonic:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "HOST", "value": "0.0.0.0" },
+        { "name": "PORT", "value": "8000" },
+        { "name": "AWS_REGION", "value": "us-east-1" },
+        { "name": "NOVA_SONIC_MODEL_ID", "value": "amazon.nova-2-sonic-v1:0" },
+        { "name": "BEDROCK_KB_ID", "value": "<YOUR_KB_ID>" },
+        { "name": "BEDROCK_KB_TOP_K", "value": "4" },
+        { "name": "BEDROCK_KB_SEARCH_TYPE", "value": "HYBRID" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/sample-voicebot-nova-sonic",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
