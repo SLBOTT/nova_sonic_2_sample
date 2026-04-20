@@ -15,6 +15,7 @@ from nova_client import DEFAULT_MODEL_ID, NovaSonicSession
 from tools import (
     ToolRegistry,
     date_time_tool,
+    knowledge_base_tool,
     location_search_tool,
     reasoning_tool,
     transcript_correction_tool,
@@ -30,6 +31,7 @@ def create_default_registry() -> ToolRegistry:
     registry.register(location_search_tool)
     registry.register(reasoning_tool)
     registry.register(wikipedia_tool)
+    registry.register(knowledge_base_tool)
     registry.register(transcript_correction_tool)
     return registry
 
